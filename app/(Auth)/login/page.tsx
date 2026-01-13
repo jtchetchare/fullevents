@@ -4,18 +4,15 @@ import Image from "next/image";
 import { useState, useEffect } from "react"
 import { Mail, User, Phone, Lock, Eye, EyeOff, CheckCircle, Loader2, LogIn } from "lucide-react"
 import { Toaster, toast } from "sonner"
-import { initializeApp } from "firebase/app"
+import { useFirebase } from "@/hook/useFirebase"
 import { 
-  getAuth, 
   createUserWithEmailAndPassword, 
   signInWithEmailAndPassword,
   signInWithPopup,
-  GoogleAuthProvider,
-  FacebookAuthProvider,
   updateProfile,
   AuthError
 } from "firebase/auth"
-import { getFirestore, doc, setDoc, getDoc } from "firebase/firestore"
+import { doc, setDoc, getDoc } from "firebase/firestore"
 
 import { Button } from "@/components/ui/button"
 import {
@@ -44,39 +41,15 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 
-// Configuration Firebase 
-const firebaseConfig = {
-  apiKey: process.env.NEXT_PUBLIC_FIREBASE_API_KEY,
-  authDomain: process.env.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN,
-  projectId: process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID,
-  storageBucket: process.env.NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET,
-  messagingSenderId: process.env.NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID,
-  appId: process.env.NEXT_PUBLIC_FIREBASE_APP_ID
-};
-
-// Initialisation Firebase
-const app = initializeApp(firebaseConfig);
-const auth = getAuth(app);
-const db = getFirestore(app);
-const googleProvider = new GoogleAuthProvider();
-const facebookProvider = new FacebookAuthProvider();
-
 // Refresh token
-const getFreshToken = async () => {
-  const user = auth.currentUser;
+const getFreshToken = async (auth: any) => {
+  const user = auth?.currentUser;
   if (user) {
-    // true = force le refresh
     const freshToken = await user.getIdToken(true);
     return freshToken;
   }
   return null;
 };
-
-// Appeler toutes les 30 minutes
-setInterval(async () => {
-  await getFreshToken();
-  console.log('Token rafraîchi');
-}, 30 * 60 * 1000); 
 
 const countries = [
   { code: "SN", name: "Sénégal", dialCode: "+221", phoneLength: 9 },
@@ -141,6 +114,8 @@ const getFirebaseErrorMessage = (error: AuthError): string => {
 }
 
 export default function Login() {
+  const { auth, db, googleProvider, facebookProvider, isInitialized } = useFirebase();
+  
   const [isLogin, setIsLogin] = useState(true)
   const [selectedCountry, setSelectedCountry] = useState("SN")
   const [showPassword, setShowPassword] = useState(false)
@@ -186,6 +161,18 @@ export default function Login() {
     }, 3000)
     return () => clearInterval(interval)
   }, [])
+
+  // Démarrer le refresh token une fois Firebase initialisé
+  useEffect(() => {
+    if (isInitialized && auth) {
+      const intervalId = setInterval(async () => {
+        await getFreshToken(auth);
+        console.log('Token rafraîchi');
+      }, 30 * 60 * 1000);
+
+      return () => clearInterval(intervalId);
+    }
+  }, [isInitialized, auth]);
 
   // Validation email
   const validateEmail = (email: string) => {
@@ -270,13 +257,18 @@ export default function Login() {
 
   // Fonction pour créer un document utilisateur dans Firestore
   const createUserProfile = async (userId: string, userData: any) => {
+    if (!db) {
+      console.error("Firestore non initialisé");
+      return false;
+    }
+    
     try {
       const userRef = doc(db, "users", userId);
       await setDoc(userRef, {
         ...userData,
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
-        emailVerified: true, // Directement vérifié
+        emailVerified: true,
         role: "user",
         status: "active"
       });
@@ -287,8 +279,15 @@ export default function Login() {
     }
   }
 
-  // Connexion avec Firebase -
+  // Connexion avec Firebase
   const handleLogin = async (email: string, password: string) => {
+    if (!auth || !isInitialized) {
+      toast.error("Erreur d'initialisation", {
+        description: "Firebase n'est pas initialisé. Veuillez réessayer.",
+      });
+      return;
+    }
+
     const loadingToast = toast.loading("Connexion en cours...");
     
     try {
@@ -296,7 +295,10 @@ export default function Login() {
       const user = userCredential.user;
       
       // Récupérer les infos utilisateur depuis Firestore
-      const userDoc = await getDoc(doc(db, "users", user.uid));
+      if (db) {
+        const userDoc = await getDoc(doc(db, "users", user.uid));
+        // Faire quelque chose avec userDoc si nécessaire
+      }
       
       toast.dismiss(loadingToast);
       toast.success("Connexion réussie ! 🎉", {
@@ -323,8 +325,15 @@ export default function Login() {
     }
   }
 
-  // Inscription avec Firebase 
+  // Inscription avec Firebase
   const handleRegister = async () => {
+    if (!auth || !db || !isInitialized) {
+      toast.error("Erreur d'initialisation", {
+        description: "Firebase n'est pas initialisé. Veuillez réessayer.",
+      });
+      return;
+    }
+
     const loadingToast = toast.loading("Création du compte en cours...");
     
     try {
@@ -343,6 +352,7 @@ export default function Login() {
       });
 
       // Créer le profil utilisateur dans Firestore
+      const currentCountry = countries.find(c => c.code === selectedCountry);
       const profileCreated = await createUserProfile(user.uid, {
         username: formData.username,
         email: formData.email,
@@ -358,8 +368,6 @@ export default function Login() {
           description: "Merci de vous connecter afin d'accéder à l'espace.",
           duration: 5000,
         });
-        
-        setShowSuccess(false);
         
         // Rediriger vers la page de login après inscription
         setTimeout(() => {
@@ -392,6 +400,13 @@ export default function Login() {
 
   // Connexion avec Google
   const handleGoogleLogin = async () => {
+    if (!auth || !googleProvider || !isInitialized) {
+      toast.error("Erreur d'initialisation", {
+        description: "Firebase n'est pas initialisé. Veuillez réessayer.",
+      });
+      return;
+    }
+
     const loadingToast = toast.loading("Connexion avec Google...");
     
     try {
@@ -399,18 +414,20 @@ export default function Login() {
       const user = result.user;
       
       // Vérifier si l'utilisateur existe déjà dans Firestore
-      const userDoc = await getDoc(doc(db, "users", user.uid));
-      
-      if (!userDoc.exists()) {
-        // Créer un nouveau profil pour les nouveaux utilisateurs Google
-        await createUserProfile(user.uid, {
-          username: user.displayName || user.email?.split('@')[0],
-          email: user.email,
-          displayName: user.displayName,
-          photoURL: user.photoURL,
-          provider: "google",
-          emailVerified: true // Directement vérifié avec Google
-        });
+      if (db) {
+        const userDoc = await getDoc(doc(db, "users", user.uid));
+        
+        if (!userDoc.exists()) {
+          // Créer un nouveau profil pour les nouveaux utilisateurs Google
+          await createUserProfile(user.uid, {
+            username: user.displayName || user.email?.split('@')[0],
+            email: user.email,
+            displayName: user.displayName,
+            photoURL: user.photoURL,
+            provider: "google",
+            emailVerified: true
+          });
+        }
       }
 
       toast.dismiss(loadingToast);
@@ -437,6 +454,13 @@ export default function Login() {
 
   // Connexion avec Facebook
   const handleFacebookLogin = async () => {
+    if (!auth || !facebookProvider || !isInitialized) {
+      toast.error("Erreur d'initialisation", {
+        description: "Firebase n'est pas initialisé. Veuillez réessayer.",
+      });
+      return;
+    }
+
     const loadingToast = toast.loading("Connexion avec Facebook...");
     
     try {
@@ -444,17 +468,19 @@ export default function Login() {
       const user = result.user;
       
       // Vérifier si l'utilisateur existe déjà dans Firestore
-      const userDoc = await getDoc(doc(db, "users", user.uid));
-      
-      if (!userDoc.exists()) {
-        await createUserProfile(user.uid, {
-          username: user.displayName || user.email?.split('@')[0],
-          email: user.email,
-          displayName: user.displayName,
-          photoURL: user.photoURL,
-          provider: "facebook",
-          emailVerified: true // Directement vérifié avec Facebook
-        });
+      if (db) {
+        const userDoc = await getDoc(doc(db, "users", user.uid));
+        
+        if (!userDoc.exists()) {
+          await createUserProfile(user.uid, {
+            username: user.displayName || user.email?.split('@')[0],
+            email: user.email,
+            displayName: user.displayName,
+            photoURL: user.photoURL,
+            provider: "facebook",
+            emailVerified: true
+          });
+        }
       }
 
       toast.dismiss(loadingToast);
@@ -482,6 +508,13 @@ export default function Login() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     
+    if (!isInitialized) {
+      toast.error("Service non disponible", {
+        description: "Le service d'authentification est en cours d'initialisation.",
+      });
+      return;
+    }
+
     const allTouched = {
       username: true,
       email: true,
@@ -770,9 +803,14 @@ export default function Login() {
                         <Button 
                           type="submit" 
                           className="w-full h-10 bg-gradient-to-r from-[#E3C32F] to-[#d4b329] hover:from-[#e8c83d] hover:to-[#ddbb34] text-black font-semibold transition-all hover:shadow-lg hover:shadow-[#E3C32F]/20 hover:scale-[1.02]" 
-                          disabled={isLoading}
+                          disabled={isLoading || !isInitialized}
                         >
-                          {isLoading ? (
+                          {!isInitialized ? (
+                            <>
+                              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                              Initialisation...
+                            </>
+                          ) : isLoading ? (
                             <>
                               <Loader2 className="mr-2 h-4 w-4 animate-spin" />
                               Connexion...
@@ -997,9 +1035,14 @@ export default function Login() {
                         <Button 
                           type="submit" 
                           className="w-full h-10 mt-2 bg-gradient-to-r from-[#E3C32F] to-[#d4b329] hover:from-[#e8c83d] hover:to-[#ddbb34] text-black font-semibold transition-all hover:shadow-lg hover:shadow-[#E3C32F]/20 hover:scale-[1.02]" 
-                          disabled={isLoading}
+                          disabled={isLoading || !isInitialized}
                         >
-                          {isLoading ? (
+                          {!isInitialized ? (
+                            <>
+                              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                              Initialisation...
+                            </>
+                          ) : isLoading ? (
                             <>
                               <Loader2 className="mr-2 h-4 w-4 animate-spin" />
                               Création...
@@ -1040,7 +1083,7 @@ export default function Login() {
                           variant="outline"
                           className="w-10 h-10 rounded-full p-0 hover:scale-110 transition-all bg-white/5 border-white/10 hover:bg-white/10 hover:border-white/20"
                           onClick={handleGoogleLogin}
-                          disabled={isLoading}
+                          disabled={isLoading || !isInitialized}
                         >
                           <svg className="w-5 h-5" viewBox="0 0 24 24">
                             <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>
@@ -1055,7 +1098,7 @@ export default function Login() {
                           variant="outline"
                           className="w-10 h-10 rounded-full p-0 hover:scale-110 transition-all bg-[#1877F2] border-[#1877F2] hover:bg-[#166FE5] hover:border-[#166FE5]"
                           onClick={handleFacebookLogin}
-                          disabled={isLoading}
+                          disabled={isLoading || !isInitialized}
                         >
                           <svg className="w-5 h-5" fill="white" viewBox="0 0 24 24">
                             <path d="M24 12.073c0-6.627-5.373-12-12-12s-12 5.373-12 12c0 5.99 4.388 10.954 10.125 11.854v-8.385H7.078v-3.47h3.047V9.43c0-3.007 1.792-4.669 4.533-4.669 1.312 0 2.686.235 2.686.235v2.953H15.83c-1.491 0-1.956.925-1.956 1.874v2.25h3.328l-.532 3.47h-2.796v8.385C19.612 23.027 24 18.062 24 12.073z"/>
