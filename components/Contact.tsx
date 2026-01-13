@@ -37,7 +37,7 @@ export default function Contact() {
       description: "Rue GY-602 Dakar, Senegal",
       color: "bg-black",
       buttonText: "Voir sur la carte",
-      link: "https://maps.google.com"
+      link: "https://www.google.com/maps/search/libert%C3%A9+6+khar+yalla/@14.7287902,-17.4541919,19z?entry=s&sa=X&ved=1t%3A199789"
     }
   ];
 
